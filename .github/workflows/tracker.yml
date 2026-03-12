@@ -3,8 +3,8 @@ name: Fuel Price Tracker
 # Trigger: Alle 5 Minuten oder manuell
 on:
   schedule:
-    # Einfach: Jede 5 Minuten (standard cron)
-    - cron: '*/5 * * * *'
+    # Test: Jede Minute
+    - cron: '* * * * *'
 
   # Erlaubt manuelles Ausführen des Workflows
   workflow_dispatch:
