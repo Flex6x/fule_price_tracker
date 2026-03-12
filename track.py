@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Automatischer Spritpreis-Tracker
-Scrappt Spritpreise von ich-tanke.de mit Selenium (JavaScript-Support)
+Scrappt Spritpreise (E10 und Diesel) von ich-tanke.de mit Selenium (JavaScript-Support)
 """
 
 import csv
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -17,42 +17,71 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 
-# Konfiguration
-CSV_FILE = "prices.csv"
+# Konfiguration - Tankstelle
+TARGET_URL = "https://ich-tanke.de/tankstelle/67a2fe58c42fd7cbe5fe8fa7f515b70b/"
+
+# Zeitzone: CET (UTC+1)
+CET = timezone(timedelta(hours=1))
+
+# Treibstoffe zu tracken mit jeweils CSV-Datei
+FUEL_TYPES = {
+    "E10": {
+        "csv_file": "e10_prices.csv",
+        "patterns": [
+            r'(?:E10|Super\s*\(E10\))[^0-9]*?(\d+\.\d{3})',
+        ]
+    },
+    "Diesel": {
+        "csv_file": "diesel_prices.csv",
+        "patterns": [
+            r'Diesel[^0-9]*?(\d+\.\d{3})',
+            r'(?:Dieselpreis|diesel)[^0-9]*?(\d+\.\d{3})',
+        ]
+    }
+}
+
 CSV_HEADER = ["time", "price"]
 
-# Tankstelle: ich-tanke.de
-TARGET_URL = "https://ich-tanke.de/tankstelle/67a2fe58c42fd7cbe5fe8fa7f515b70b/"
-# Fuel type zu tracken: "Super Benzin" oder "Super (E10)" oder "Diesel"
-FUEL_TYPE = "Super (E10) Benzin"
-# XPath zum Finden von Preisinformationen auf der Seite
-PRICE_XPATH_PATTERNS = [
-    "//span[contains(., 'E10')]/../following-sibling::*[contains(., '.')]",
-    "//span[contains(text(), 'E10')]/parent::*/following-sibling::*/text()",
-    "//*[contains(text(), '1.')]",
-]
 
-
-def init_csv_if_needed():
+def init_csv_if_needed(fuel_type):
     """
     Erstellt die CSV-Datei mit Header falls sie nicht existiert.
+
+    Args:
+        fuel_type (str): "E10" oder "Diesel"
     """
-    if not os.path.exists(CSV_FILE):
-        with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+    csv_file = FUEL_TYPES[fuel_type]["csv_file"]
+
+    if not os.path.exists(csv_file):
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(CSV_HEADER)
-        print(f"[+] CSV-Datei '{CSV_FILE}' erstellt mit Header: {CSV_HEADER}")
+        print(f"[+] CSV-Datei '{csv_file}' erstellt mit Header: {CSV_HEADER}")
 
 
-def get_fuel_price():
+def get_current_cet_time():
     """
-    Scrappt den aktuellen Spritpreis von ich-tanke.de mit Selenium.
-    Lädt JavaScript dynamisch und extrahiert den Preis mit Regex.
+    Gibt aktuelle Zeit in CET (UTC+1) zurück.
 
     Returns:
-        str: Der gescrapte Preis (z.B. "1.939") oder None falls fehlgeschlagen
+        str: Zeit im Format "YYYY-MM-DD HH:MM:SS"
+    """
+    now_utc = datetime.now(timezone.utc)
+    now_cet = now_utc.astimezone(CET)
+    return now_cet.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_fuel_prices():
+    """
+    Scrappt alle konfigurierten Spritpreise von ich-tanke.de mit Selenium.
+    Lädt JavaScript dynamisch und extrahiert die Preise mit Regex.
+
+    Returns:
+        dict: {"E10": "1.939", "Diesel": "2.119"} oder teilweise gefüllt
     """
     driver = None
+    prices = {}
+
     try:
         # Chrome im headless Modus starten (für GitHub Actions)
         chrome_options = ChromeOptions()
@@ -80,28 +109,33 @@ def get_fuel_price():
         # Hole den kompletten Seiten-Text
         page_text = driver.page_source
 
-        # Suche nach E10/Super (E10) Preis mit Regex
-        # Pattern: Suche nach "E10" oder "Super (E10)" gefolgt von einer Zahl wie "1.939"
-        price_match = re.search(
-            r'(?:E10|Super\s*\(E10\))[^0-9]*?(\d+\.\d{3})',
-            page_text,
-            re.IGNORECASE
-        )
+        # Suche nach jeden konfigurierten Treibstoff-Preis
+        for fuel_type, config in FUEL_TYPES.items():
+            price = None
 
-        if not price_match:
-            # Versuche allgemeines Preismuster
-            price_match = re.search(r'([1-2]\.\d{3})', page_text)
+            # Versuche alle Patterns für diesen Treibstoff
+            for pattern in config["patterns"]:
+                price_match = re.search(pattern, page_text, re.IGNORECASE)
+                if price_match:
+                    price = price_match.group(1)
+                    break
 
-        if price_match:
-            price = price_match.group(1)
-            return price
+            # Fallback: Allgemeines Preismuster
+            if not price:
+                price_match = re.search(r'([1-3]\.\d{3})', page_text)
+                if price_match:
+                    price = price_match.group(1)
 
-        print(f"[!] Konnte Preis für '{FUEL_TYPE}' nicht finden")
-        return None
+            if price:
+                prices[fuel_type] = price
+            else:
+                print(f"[!] Konnte Preis für '{fuel_type}' nicht finden")
+
+        return prices
 
     except Exception as e:
         print(f"[-] Fehler beim Scrapen: {e}")
-        return None
+        return {}
     finally:
         if driver:
             try:
@@ -110,22 +144,25 @@ def get_fuel_price():
                 pass
 
 
-def price_already_recorded(price):
+def price_already_recorded(fuel_type, price):
     """
     Prüft ob der aktuelle Preis bereits in den letzten Einträgen vorhanden ist.
     Das verhindert, dass identische Preise mehrfach hintereinander gespeichert werden.
 
     Args:
+        fuel_type (str): "E10" oder "Diesel"
         price (str): Der zu prüfende Preis
 
     Returns:
         bool: True falls Preis bereits vorhanden, False sonst
     """
-    if not os.path.exists(CSV_FILE):
+    csv_file = FUEL_TYPES[fuel_type]["csv_file"]
+
+    if not os.path.exists(csv_file):
         return False
 
     try:
-        with open(CSV_FILE, "r", encoding="utf-8") as f:
+        with open(csv_file, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 
@@ -135,68 +172,78 @@ def price_already_recorded(price):
                     if row.get("price") == price:
                         return True
     except Exception as e:
-        print(f"[!] Fehler beim Lesen der CSV: {e}")
+        print(f"[!] Fehler beim Lesen der CSV für '{fuel_type}': {e}")
 
     return False
 
 
-def save_price(price):
+def save_price(fuel_type, price):
     """
-    Speichert den Preis mit aktuellem Zeitstempel in prices.csv.
+    Speichert den Preis mit aktuellem Zeitstempel (CET) in die entsprechende CSV.
 
     Args:
+        fuel_type (str): "E10" oder "Diesel"
         price (str): Der zu speichernde Preis
 
     Returns:
         bool: True falls erfolgreich gespeichert, False sonst
     """
+    csv_file = FUEL_TYPES[fuel_type]["csv_file"]
+
     try:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = get_current_cet_time()
 
         # CSV-Datei muss zu diesem Punkt existieren (wurde in init_csv_if_needed erstellt)
-        with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+        with open(csv_file, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([now, price])
 
-        print(f"[+] Preis gespeichert: {price} Euro um {now}")
+        print(f"[+] {fuel_type}-Preis gespeichert: {price} Euro um {now} CET")
         return True
 
     except Exception as e:
-        print(f"[-] Fehler beim Speichern: {e}")
+        print(f"[-] Fehler beim Speichern {fuel_type}-Preis: {e}")
         return False
 
 
 def main():
     """
-    Hauptfunktion: Initialisiert CSV, scrappt Preis, speichert ihn.
+    Hauptfunktion: Initialisiert CSVs, scrappt Preise, speichert sie.
     """
     print("=" * 50)
     print("Spritpreis-Tracker - Ausführung")
     print("=" * 50)
-    print(f"Trackiere: {FUEL_TYPE}")
     print(f"Quelle: ich-tanke.de")
+    print(f"Zeitzone: CET (UTC+1)")
 
-    # Schritt 1: CSV initialisieren falls nötig
-    init_csv_if_needed()
+    # Schritt 1: CSVs initialisieren falls nötig
+    for fuel_type in FUEL_TYPES.keys():
+        init_csv_if_needed(fuel_type)
 
-    # Schritt 2: Aktuellen Preis scrapen
-    print("\n[*] Scrappt aktuellen Preis...")
-    price = get_fuel_price()
+    # Schritt 2: Aktuelle Preise scrapen
+    print("\n[*] Scrappt aktuelle Preise...")
+    prices = get_fuel_prices()
 
-    if not price:
-        print("[-] Konnte keinen Preis scrapen. Abbruch.")
+    if not prices:
+        print("[-] Konnte keine Preise scrapen. Abbruch.")
         return False
 
-    print(f"\n[+] Aktueller Preis: {price} Euro")
+    # Schritt 3: Preise speichern (nur wenn neu)
+    success = True
+    for fuel_type, price in prices.items():
+        print(f"\n[+] Aktueller Preis {fuel_type}: {price} Euro")
 
-    # Schritt 3: Prüfe ob Preis bereits gespeichert wurde (Duplikate vermeiden)
-    if price_already_recorded(price):
-        print("[*] Dieser Preis wurde bereits kürzlich gespeichert. Keine Änderung.")
-        return True
+        # Prüfe ob Preis bereits gespeichert wurde (Duplikate vermeiden)
+        if price_already_recorded(fuel_type, price):
+            print(f"[*] Dieser {fuel_type}-Preis wurde bereits kürzlich gespeichert. Keine Änderung.")
+            continue
 
-    # Schritt 4: Neuen Preis speichern
-    print("\n[*] Speichere Preis...")
-    return save_price(price)
+        # Neuen Preis speichern
+        print(f"[*] Speichere {fuel_type}-Preis...")
+        if not save_price(fuel_type, price):
+            success = False
+
+    return success
 
 
 if __name__ == "__main__":

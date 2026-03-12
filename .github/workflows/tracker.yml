@@ -51,12 +51,12 @@ jobs:
       # Committen und pushen falls Änderungen vorhanden sind
       - name: Commit and push if prices changed
         run: |
-          if git diff --quiet prices.csv; then
-            echo "No changes in prices.csv - skipping commit"
+          if git diff --quiet e10_prices.csv diesel_prices.csv; then
+            echo "No changes in price files - skipping commit"
           else
-            echo "Changes detected in prices.csv - committing"
-            git add prices.csv
-            git commit -m "chore: update fuel prices - $(date +'%Y-%m-%d %H:%M:%S')"
+            echo "Changes detected in price files - committing"
+            git add e10_prices.csv diesel_prices.csv
+            git commit -m "chore: update fuel prices - $(date +'%Y-%m-%d %H:%M:%S') CET"
             git push
           fi
 
