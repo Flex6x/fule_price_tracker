@@ -69,5 +69,15 @@ jobs:
             git push
           fi
 
+      # Trigger nächsten Run nach 5 Minuten
+      - name: Schedule next run in 5 minutes
+        run: |
+          echo "[*] Warte 5 Minuten bis zum nächsten Run..."
+          sleep 300
+          echo "[*] Triggere nächsten Workflow-Run..."
+          gh workflow run tracker.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+
 
 
