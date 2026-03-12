@@ -9,13 +9,6 @@ import os
 import re
 import time
 from datetime import datetime, timezone, timedelta
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
 
 # Konfiguration - Tankstelle
 TARGET_URL = "https://ich-tanke.de/tankstelle/67a2fe58c42fd7cbe5fe8fa7f515b70b/"
@@ -73,17 +66,38 @@ def get_current_cet_time():
 
 def get_fuel_prices():
     """
-    Scrappt alle konfigurierten Spritpreise von ich-tanke.de mit Selenium.
-    Lädt JavaScript dynamisch und extrahiert die Preise mit Regex.
+    Scrappt alle konfigurierten Spritpreise von ich-tanke.de.
+    Versucht zuerst Selenium, fällt auf requests+BeautifulSoup zurück.
 
     Returns:
         dict: {"E10": "1.939", "Diesel": "2.119"} oder teilweise gefüllt
     """
-    driver = None
-    prices = {}
+    # Versuche zuerst mit Selenium (für lokale Nutzung)
+    prices = try_selenium_scrape()
 
+    if prices:
+        return prices
+
+    # Fallback auf einfaches Scraping (für GitHub Actions)
+    print("[*] Selenium fehlgeschlagen, nutze Fallback-Methode...")
+    return try_simple_scrape()
+
+
+def try_selenium_scrape():
+    """Versucht zu scrapen mit Selenium."""
     try:
-        # Chrome im headless Modus starten (für GitHub Actions)
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.chrome.options import Options as ChromeOptions
+        from webdriver_manager.chrome import ChromeDriverManager
+        from selenium.webdriver.chrome.service import Service
+
+        driver = None
+        prices = {}
+
+        # Chrome im headless Modus starten
         chrome_options = ChromeOptions()
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
@@ -91,36 +105,80 @@ def get_fuel_prices():
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
-        driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()),
-            options=chrome_options
-        )
-        driver.set_page_load_timeout(15)
+        try:
+            driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=chrome_options
+            )
+            driver.set_page_load_timeout(15)
 
-        print("[*] Lade Seite mit Selenium...")
-        driver.get(TARGET_URL)
+            print("[*] Lade Seite mit Selenium...")
+            driver.get(TARGET_URL)
 
-        # Warte bis die Seite vollständig geladen ist (max. 10 Sekunden)
-        time.sleep(3)
-        WebDriverWait(driver, 10).until(
-            lambda d: len(d.find_elements(By.TAG_NAME, "span")) > 20
-        )
+            time.sleep(3)
+            WebDriverWait(driver, 10).until(
+                lambda d: len(d.find_elements(By.TAG_NAME, "span")) > 20
+            )
 
-        # Hole den kompletten Seiten-Text
-        page_text = driver.page_source
+            page_text = driver.page_source
 
-        # Suche nach jeden konfigurierten Treibstoff-Preis
+            # Suche nach Preisen
+            for fuel_type, config in FUEL_TYPES.items():
+                price = None
+                for pattern in config["patterns"]:
+                    price_match = re.search(pattern, page_text, re.IGNORECASE)
+                    if price_match:
+                        price = price_match.group(1)
+                        break
+
+                if not price:
+                    price_match = re.search(r'([1-3]\.\d{3})', page_text)
+                    if price_match:
+                        price = price_match.group(1)
+
+                if price:
+                    prices[fuel_type] = price
+
+            return prices
+
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+
+    except Exception as e:
+        print(f"[!] Selenium fehlgeschlagen: {e}")
+        return {}
+
+
+def try_simple_scrape():
+    """Fallback: Einfaches Scraping mit requests + BeautifulSoup."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+
+        print("[*] Lade Seite mit requests...")
+        response = requests.get(TARGET_URL, timeout=10, headers=headers)
+        response.raise_for_status()
+
+        page_text = response.text
+        prices = {}
+
+        # Suche nach Preisen im HTML-Text
         for fuel_type, config in FUEL_TYPES.items():
             price = None
-
-            # Versuche alle Patterns für diesen Treibstoff
             for pattern in config["patterns"]:
                 price_match = re.search(pattern, page_text, re.IGNORECASE)
                 if price_match:
                     price = price_match.group(1)
                     break
 
-            # Fallback: Allgemeines Preismuster
             if not price:
                 price_match = re.search(r'([1-3]\.\d{3})', page_text)
                 if price_match:
@@ -128,20 +186,12 @@ def get_fuel_prices():
 
             if price:
                 prices[fuel_type] = price
-            else:
-                print(f"[!] Konnte Preis für '{fuel_type}' nicht finden")
 
         return prices
 
     except Exception as e:
-        print(f"[-] Fehler beim Scrapen: {e}")
+        print(f"[-] Einfaches Scraping fehlgeschlagen: {e}")
         return {}
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
 
 
 def price_already_recorded(fuel_type, price):
