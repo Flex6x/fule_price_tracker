@@ -1,0 +1,53 @@
+name: Fuel Price Tracker
+
+# Trigger: Alle 5 Minuten oder manuell
+on:
+  schedule:
+    # Läuft täglich alle 5 Minuten
+    - cron: '*/5 * * * *'
+
+  # Erlaubt manuelles Ausführen des Workflows
+  workflow_dispatch:
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout des Repositories
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Python 3.11 Setup
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      # Dependencies installieren
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      # Spritpreis-Tracker ausführen
+      - name: Run fuel price tracker
+        run: python track.py
+
+      # Git-Konfiguration für automatische Commits
+      - name: Configure Git
+        run: |
+          git config --local user.name "tracker"
+          git config --local user.email "tracker@example.com"
+
+      # Committen und pushen falls Änderungen vorhanden sind
+      - name: Commit and push if prices changed
+        run: |
+          if git diff --quiet prices.csv; then
+            echo "No changes in prices.csv - skipping commit"
+          else
+            echo "Changes detected in prices.csv - committing"
+            git add prices.csv
+            git commit -m "chore: update fuel prices - $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          fi
