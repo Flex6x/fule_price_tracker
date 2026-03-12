@@ -3,11 +3,18 @@ name: Fuel Price Tracker
 # Trigger: Alle 5 Minuten oder manuell
 on:
   schedule:
-    # Läuft täglich alle 5 Minuten
-    - cron: '*/5 * * * *'
+    # UTC-Zeit! Alle 5 Minuten rund um die Uhr
+    - cron: '0,5,10,15,20,25,30,35,40,45,50,55 * * * *'
 
   # Erlaubt manuelles Ausführen des Workflows
   workflow_dispatch:
+
+  # Auch bei Push zum main Branch
+  push:
+    branches:
+      - main
+    paths:
+      - 'track.py'
 
 # Berechtigungen für Git Push
 permissions:
@@ -56,6 +63,8 @@ jobs:
           else
             echo "Changes detected in price files - committing"
             git add e10_prices.csv diesel_prices.csv
+            git config --local user.name "tracker"
+            git config --local user.email "tracker@example.com"
             git commit -m "chore: update fuel prices - $(date +'%Y-%m-%d %H:%M:%S') CET"
             git push
           fi
