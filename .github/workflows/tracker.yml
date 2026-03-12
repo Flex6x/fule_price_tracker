@@ -66,12 +66,12 @@ jobs:
             git push
           fi
 
-      # Warte 2 Minuten dann triggere nächsten Run
-      - name: Wait 2 minutes and trigger next run
+      # Warte 30 Minuten dann triggere nächsten Run
+      - name: Wait 30 minutes and trigger next run
         continue-on-error: true
         run: |
-          echo "[*] Warte 2 Minuten bis zum nächsten Run..."
-          sleep 120
+          echo "[*] Warte 30 Minuten bis zum nächsten Run..."
+          sleep 1800
           echo "[*] Triggere nächsten Workflow-Run via REST API..."
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
